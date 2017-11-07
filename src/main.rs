@@ -1,9 +1,9 @@
 extern crate hyper;
 extern crate futures;
 extern crate pretty_env_logger;
+#[macro_use] extern crate log;
 extern crate tokio_core;
 
-use futures::future::FutureResult;
 use futures::sync::mpsc::*;
 use futures::sink::Sink;
 use futures::Future;
@@ -26,8 +26,6 @@ impl Broker {
     }
 
     fn publish(&mut self, channel: &str, payload: &str) {
-        println!("publishing: {}", payload);
-
         for subscription in self.subscriptions.iter_mut() {
             if subscription.channel == channel {
                 subscription.sender.start_send(Ok(Chunk::from(format!("{}\n", payload))));
@@ -90,7 +88,7 @@ impl Service for MessagingServer {
     type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
 
     fn call(&self, req: Request) -> Self::Future {
-        let (method, uri, _, headers, body) = req.deconstruct();
+        let (method, uri, _, _headers, _body) = req.deconstruct();
     
         match (method, uri.path()) {
             (Method::Get, "/") => {
@@ -119,7 +117,7 @@ impl Service for MessagingServer {
 
                         let concat = body.concat2().and_then(move |body_chunk| {
                             let payload = std::str::from_utf8(&body_chunk).unwrap().to_string();
-                       
+
                             broker.publish(&channel, &payload);
 
                             futures::future::ok(Response::new()
@@ -175,23 +173,28 @@ fn main() {
 
     let server = Http::new().bind(&addr, move || Ok(MessagingServer::new(broker.clone()))).unwrap();
 
-    println!("Listening on http://{} with 1 thread.", server.local_addr().unwrap());
+    info!("Listening on http://{} with 1 thread.", server.local_addr().unwrap());
     server.run().unwrap();
 }
 
 #[cfg(test)]
 mod test {
+    extern crate rand;
+    use test::rand::Rng;
+
     use std::thread;
     use std::net::SocketAddr;
     use futures::sync::oneshot;
     use futures::Future;
     use hyper::server::{Http};
-    use super::{MessagingServer, Broker};
+    use super::{MessagingServer, Broker, SyncedBroker};
     use pretty_env_logger;
     use hyper;
     use tokio_core::reactor::Core;
     use std::str;
     use futures::Stream;
+    use futures::future::join_all;
+
     use std::time::Duration;
     use std::sync::{Arc, Mutex};
 
@@ -260,13 +263,13 @@ mod test {
             })
             .and_then(|body| {
                 let body_str = str::from_utf8(body.as_ref()).expect("client body decode error");
-                assert_eq!(body_str, "test");
+                assert_eq!(body_str, "{ \"ok\": true }");
                 Ok(())
             });
         core.run(test).expect("client body read error");
     }
 
-        #[test]
+    #[test]
     fn test_subscribe() {
         let mut core = Core::new().expect("core creation error");
         let handle = core.handle();
@@ -276,19 +279,31 @@ mod test {
         let client = hyper::Client::new(&handle);
         
         let uri = format!("http://{}/channels/test", server.addr()).parse().expect("uri parse error");
-        let mut request = hyper::Request::new(hyper::Method::Get, uri);
+        let request = hyper::Request::new(hyper::Method::Get, uri);
+
+        let uri = format!("http://{}/channel/test", server.addr()).parse().expect("uri parse error");
+        let mut publish_request = hyper::Request::new(hyper::Method::Post, uri);
+        publish_request.set_body("test");
 
         let test = client.request(request)
             .then(|result| {
                 let res = result.expect("client http error");
-                res.body().concat2()
+                res.body().into_future()
             })
-            .and_then(|body| {
-                let body_str = str::from_utf8(body.as_ref()).expect("client body decode error");
-                assert_eq!(body_str, "test");
+            .map_err(|(err, _)|{
+                err
+            })
+            .and_then(|(chunk, _)| {
+                let string = chunk.unwrap();
+                let body_str = str::from_utf8(&string).expect("client body decode error");
+                assert_eq!(body_str, "test\n");
                 Ok(())
             });
-        core.run(test).expect("client body read error");
+        let publish = client.request(publish_request).and_then(|_| Ok(()));
+
+        let futures: Vec<Box<Future<Item=(), Error=hyper::Error>>> = vec![Box::new(test), Box::new(publish)];
+        let joined = join_all(futures);
+        core.run(joined).expect("client body read error");
     }
     
     struct Serve {
@@ -296,7 +311,6 @@ mod test {
         shutdown_signal: Option<oneshot::Sender<()>>,
         thread: Option<thread::JoinHandle<()>>,
     }
-
 
     impl Drop for Serve {
         fn drop(&mut self) {
@@ -313,8 +327,10 @@ mod test {
 
     fn serve() -> Serve {
         let _ = pretty_env_logger::init();
+        let port = rand::thread_rng().gen_range(3000, 4000);
+
         
-        let addr = "127.0.0.1:3000".parse().unwrap();
+        let addr = format!("127.0.0.1:{}", port).parse().unwrap();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let thread_name = format!("test-server");
