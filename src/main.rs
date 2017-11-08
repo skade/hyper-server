@@ -88,7 +88,7 @@ impl Service for MessagingServer {
     type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
 
     fn call(&self, req: Request) -> Self::Future {
-        let (method, uri, _, _headers, _body) = req.deconstruct();
+        let (method, uri, _, _headers, body) = req.deconstruct();
     
         match (method, uri.path()) {
             (Method::Get, "/") => {
@@ -123,7 +123,8 @@ impl Service for MessagingServer {
                             futures::future::ok(Response::new()
                                 .with_header(ContentLength(OK.len() as u64))
                                 .with_header(ContentType::plaintext())
-                                .with_body(OK))
+                                .with_body(OK)
+                            )
                         });
 
                         Box::new(concat)
@@ -328,7 +329,6 @@ mod test {
     fn serve() -> Serve {
         let _ = pretty_env_logger::init();
         let port = rand::thread_rng().gen_range(3000, 4000);
-
         
         let addr = format!("127.0.0.1:{}", port).parse().unwrap();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
