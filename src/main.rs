@@ -9,7 +9,8 @@ use futures::sink::Sink;
 use futures::Future;
 use futures::stream::Stream;
 
-use std::sync::{Arc, Mutex};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use hyper::header::{ContentLength, ContentType};
 use hyper::server::{Http, Service, Request, Response};
@@ -49,32 +50,32 @@ impl Subscription {
 
 #[derive(Debug)]
 struct SyncedBroker {
-    inner: Mutex<Broker>
+    inner: RefCell<Broker>
 }
 
 impl SyncedBroker {
     fn new(broker: Broker) -> SyncedBroker {
-        SyncedBroker { inner: Mutex::new(broker) }
+        SyncedBroker { inner: RefCell::new(broker) }
     }
 
     fn subscribe(&self, subscription: Subscription) {
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = self.inner.borrow_mut();
         guard.subscribe(subscription);
     }
 
     fn publish(&self, channel: &str, payload: &str) {
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = self.inner.borrow_mut();
         guard.publish(channel, payload);
     }
 }
 
 #[derive(Debug)]
 struct MessagingServer {
-    broker: Arc<SyncedBroker>
+    broker: Rc<SyncedBroker>
 }
 
 impl MessagingServer {
-    fn new(broker: Arc<SyncedBroker>) -> MessagingServer {
+    fn new(broker: Rc<SyncedBroker>) -> MessagingServer {
         MessagingServer { broker }
     }
 }
@@ -170,7 +171,7 @@ impl Service for MessagingServer {
 fn main() {
     pretty_env_logger::init().unwrap();
     let addr = "127.0.0.1:3000".parse().unwrap();
-    let broker = Arc::new(SyncedBroker::new(Broker::default()));
+    let broker = Rc::new(SyncedBroker::new(Broker::default()));
 
     let server = Http::new().bind(&addr, move || Ok(MessagingServer::new(broker.clone()))).unwrap();
 
@@ -197,7 +198,7 @@ mod test {
     use futures::future::join_all;
 
     use std::time::Duration;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Mutex};
 
     #[test]
     fn test_heartbeat_get() {
@@ -340,6 +341,7 @@ mod test {
             let mut srv = Http::new()
                 .bind(&addr, move || Ok(MessagingServer::new(broker.clone()))).unwrap();
             srv.shutdown_timeout(Duration::from_millis(10));
+            
             srv.run_until(shutdown_rx.then(|_| Ok(()))).unwrap();
         }).unwrap();
 
