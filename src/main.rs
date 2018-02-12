@@ -190,7 +190,6 @@ mod test {
     use futures::Future;
     use hyper::server::{Http};
     use super::{MessagingServer, Broker, SyncedBroker};
-    use pretty_env_logger;
     use hyper;
     use tokio_core::reactor::Core;
     use std::str;
@@ -198,7 +197,7 @@ mod test {
     use futures::future::join_all;
 
     use std::time::Duration;
-    use std::sync::{Mutex};
+    use std::rc::Rc;
 
     #[test]
     fn test_heartbeat_get() {
@@ -328,7 +327,6 @@ mod test {
     }
 
     fn serve() -> Serve {
-        let _ = pretty_env_logger::init();
         let port = rand::thread_rng().gen_range(3000, 4000);
         
         let addr = format!("127.0.0.1:{}", port).parse().unwrap();
@@ -336,7 +334,7 @@ mod test {
 
         let thread_name = format!("test-server");
         let thread = thread::Builder::new().name(thread_name).spawn(move || {
-            let broker = Arc::new(SyncedBroker::new(Broker::default()));
+            let broker = Rc::new(SyncedBroker::new(Broker::default()));
 
             let mut srv = Http::new()
                 .bind(&addr, move || Ok(MessagingServer::new(broker.clone()))).unwrap();
