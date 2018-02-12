@@ -169,7 +169,7 @@ impl Service for MessagingServer {
 }
 
 fn main() {
-    pretty_env_logger::init().unwrap();
+    pretty_env_logger::init();
     let addr = "127.0.0.1:3000".parse().unwrap();
     let broker = Rc::new(SyncedBroker::new(Broker::default()));
 
